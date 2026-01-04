@@ -81,7 +81,7 @@ function htmlFor(data) {
     --line2:rgba(244,244,245,0.30);
   }
 
-  /* CRITICAL: prevents padding from causing cut-off */
+  /* Prevent padding from causing cut-off */
   *, *::before, *::after { box-sizing: border-box; }
 
   html,body{margin:0;padding:0;background:#000;}
@@ -158,7 +158,7 @@ function htmlFor(data) {
     transform: translateY(2px);
   }
 
-  /* Footer is ABSOLUTE so it can never get pushed off-canvas */
+  /* Footer pinned to bottom */
   .footer{
     position:absolute;
     left:56px; right:56px;
@@ -183,35 +183,31 @@ function htmlFor(data) {
     font-size:22px;
   }
 
-  /* Schedule area: keep within canvas and reserve space for footer */
+  /* Schedule area with reserved space for footer */
   .schedule{
     position:relative;
-    height:calc(100% - 56px - 48px - 64px - 22px); 
-    /* Explanation:
-       - total height minus top/bottom pad (56/48)
-       - minus approx title line height area (~64)
-       - minus header margin-bottom (22)
-       This keeps schedule safely above footer.
-    */
-    padding-bottom:86px; /* reserve space so last day never overlaps footer */
+    height:calc(100% - 56px - 48px - 64px - 22px);
+    padding-bottom:86px;
     display:flex;
     flex-direction:column;
-    justify-content:space-between; /* spreads days vertically */
+    justify-content:space-between;
     gap:22px;
   }
 
   .day{ margin:0; }
 
-  /* Fixed label column keeps rules aligned */
+  /*
+    UPDATED: dayHead now uses auto-sized label column so the divider
+    starts a consistent distance from the day rectangle.
+  */
   .dayHead{
     display:grid;
-    grid-template-columns: 180px 1fr;
+    grid-template-columns: max-content 1fr; /* auto width for day box */
     align-items:center;
-    column-gap:14px;
+    column-gap:18px; /* EVEN SPACING between box and line */
     margin-bottom:10px;
   }
 
-  /* Rectangular day box, variable width */
   .dayBox{
     border:2px solid var(--line2);
     border-radius:10px;
@@ -231,28 +227,58 @@ function htmlFor(data) {
     opacity:0.9;
   }
 
-  /* Rows block */
+  /*
+    UPDATED: rows align under the start of the divider line by using
+    the same left edge as the divider line: dayBox width + column-gap.
+    We do this by matching .rows padding-left to the dayBox area.
+  */
   .rows{
-    margin-left:180px;
+    /* Align rows under the divider line start (not under a fixed 180px column) */
+    padding-left: calc(16px + 2px + 16px); /* matches dayBox horizontal padding + border (approx) */
+    margin-left: 0;
     margin-top:8px;
     display:flex;
     flex-direction:column;
-    gap:14px; /* consistent spacing between show lines */
+    gap:14px;
   }
 
-  /* One show line */
+  /* Because dayHead is grid with max-content, we need rows to start at same x as rule.
+     We accomplish this by nesting rows under the rule column via a wrapper behavior:
+     We'll shift rows using a left margin equal to the dayBox rendered width + gap.
+     Since CSS can't easily reference sibling width, we instead wrap rows visually by
+     placing them in a grid context using the same columns as dayHead.
+  */
+
+  /* New layout: make each day a grid with same columns as dayHead */
+  .day{
+    display:grid;
+    grid-template-columns: max-content 1fr;
+    column-gap:18px;
+  }
+
+  /* dayHead spans both columns but keeps its internal grid for the line */
+  .dayHead{
+    grid-column: 1 / -1;
+  }
+
+  /* Place rows in the second column so they align with the rule start */
+  .rows{
+    grid-column: 2;
+    padding-left:0;
+  }
+
   .row{
     display:grid;
     grid-template-columns: 110px 1fr;
     gap:18px;
-    align-items:baseline; /* better alignment between time and title */
+    align-items:baseline;
     margin:0;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     font-weight:700;
     letter-spacing:0.35px;
     color:var(--muted);
     font-size:18px;
-    line-height:1.45; /* more consistent “leading” */
+    line-height:1.45;
   }
 
   .time{
