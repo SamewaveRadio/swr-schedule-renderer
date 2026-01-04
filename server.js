@@ -1,25 +1,51 @@
-// server.js — FULL REPLACEMENT (green table poster + custom font/logo from /Assets)
+// server.js — FULL REPLACEMENT (robust /Assets serving + correct https baseUrl)
 
 import express from "express";
 import path from "path";
+import fs from "fs";
 import { fileURLToPath } from "url";
 import { chromium } from "playwright";
 
 const app = express();
+app.set("trust proxy", 1); // IMPORTANT on Render
+
 app.use(express.json({ limit: "8mb" }));
 
 // Resolve __dirname for ES Modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// IMPORTANT: your folder is named "Assets" (capital A)
-app.use(
-  "/Assets",
-  express.static(path.join(__dirname, "Assets"), {
-    maxAge: "7d",
-    etag: true,
-  })
-);
+// ---- Robust Assets serving (covers server.js not being at repo root) ----
+const candidates = [
+  // Most common: Assets folder next to server.js
+  path.join(__dirname, "Assets"),
+  // Common: Assets folder at repo root while server.js is in a subfolder
+  path.join(process.cwd(), "Assets"),
+  // Safety if you ever move it lower
+  path.join(process.cwd(), "swr-schedule-renderer", "Assets"),
+];
+
+const assetsDir = candidates.find((p) => fs.existsSync(p) && fs.statSync(p).isDirectory());
+
+if (assetsDir) {
+  console.log("Serving Assets from:", assetsDir);
+  app.use("/Assets", express.static(assetsDir, { maxAge: "7d", etag: true }));
+  app.use("/assets", express.static(assetsDir, { maxAge: "7d", etag: true })); // alias
+} else {
+  console.warn("⚠️ Assets folder not found. Tried:", candidates);
+}
+
+// Debug helper (optional but useful): visit /debug/assets to confirm paths on Render
+app.get("/debug/assets", (_req, res) => {
+  res.json({
+    cwd: process.cwd(),
+    __dirname,
+    candidates,
+    assetsDir: assetsDir || null,
+    foundIcon: assetsDir ? fs.existsSync(path.join(assetsDir, "Icon.png")) : false,
+    foundFont: assetsDir ? fs.existsSync(path.join(assetsDir, "MainFont.woff2")) : false,
+  });
+});
 
 // Friendly error for bad JSON
 app.use((err, _req, res, next) => {
@@ -67,29 +93,26 @@ function htmlFor(data, baseUrl) {
   const W = data?.size?.width ?? 1080;
   const H = data?.size?.height ?? 1350;
 
-  // Header text
   const headerLeft = escapeHtml(data.headerLeft || "THIS WEEK ON SAMEWAVE RADIO");
   const headerRight = escapeHtml(data.headerRight || (data.dateRange || ""));
 
-  // Use your exact asset names/locations
+  // Your exact filenames
   const fontUrl = data.fontUrl || `${baseUrl}/Assets/MainFont.woff2`;
   const logoUrl = data.logoUrl || `${baseUrl}/Assets/Icon.png`;
 
-  // Color theme (defaults match your reference)
-  const bg = data.bgColor || "#41E14D";      // bright green
-  const ink = data.inkColor || "#0B0C0F";    // near-black
-  const grid = data.gridColor || "rgba(0,0,0,0.20)";
+  const bg = data.bgColor || "#41E14D";
+  const ink = data.inkColor || "#0B0C0F";
 
   const rows = normalizeRows(data);
 
   const rowsHtml = rows
     .map(
       (r) => `
-    <div class="tRow">
-      <div class="left">${escapeHtml(r.left)}</div>
-      <div class="right">${escapeHtml(r.right)}</div>
-    </div>
-  `
+      <div class="tRow">
+        <div class="left">${escapeHtml(r.left)}</div>
+        <div class="right">${escapeHtml(r.right)}</div>
+      </div>
+    `
     )
     .join("");
 
@@ -102,12 +125,10 @@ function htmlFor(data, baseUrl) {
   :root{
     --bg:${bg};
     --ink:${ink};
-    --grid:${grid};
   }
   *, *::before, *::after { box-sizing: border-box; }
   html, body { margin:0; padding:0; background:#000; }
 
-  /* Custom font */
   @font-face{
     font-family: "SWRCustom";
     src: url("${fontUrl}") format("woff2");
@@ -125,7 +146,6 @@ function htmlFor(data, baseUrl) {
     color: var(--ink);
   }
 
-  /* Subtle texture/grid */
   .canvas::before{
     content:"";
     position:absolute; inset:0;
@@ -137,13 +157,8 @@ function htmlFor(data, baseUrl) {
     pointer-events:none;
   }
 
-  .pad{
-    position:absolute;
-    inset: 0;
-    padding: 56px;
-  }
+  .pad{ position:absolute; inset:0; padding:56px; }
 
-  /* Logo in top-right */
   .logo{
     position:absolute;
     top: 40px;
@@ -153,14 +168,12 @@ function htmlFor(data, baseUrl) {
     image-rendering: -webkit-optimize-contrast;
   }
 
-  /* Table container pinned to bottom */
   .table{
     position:absolute;
     left:56px;
     right:56px;
     bottom:56px;
     border: 2px solid var(--ink);
-    background: transparent;
   }
 
   .tHeader{
@@ -176,10 +189,7 @@ function htmlFor(data, baseUrl) {
     font-size: 16px;
     line-height: 1.2;
   }
-  .tHeader .rightH{
-    text-align:right;
-    white-space:nowrap;
-  }
+  .tHeader .rightH{ text-align:right; white-space:nowrap; }
 
   .tBody{
     font-family: "SWRCustom", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
@@ -198,19 +208,10 @@ function htmlFor(data, baseUrl) {
     border-bottom: 1px solid rgba(0,0,0,0.35);
     align-items: start;
   }
-  .tRow:last-child{
-    border-bottom: none;
-  }
+  .tRow:last-child{ border-bottom:none; }
 
-  .left{
-    overflow-wrap:anywhere;
-    white-space: normal;
-  }
-  .right{
-    text-align:right;
-    white-space: nowrap;
-    opacity: 0.95;
-  }
+  .left{ overflow-wrap:anywhere; white-space: normal; }
+  .right{ text-align:right; white-space: nowrap; opacity: 0.95; }
 </style>
 </head>
 <body>
@@ -219,7 +220,7 @@ function htmlFor(data, baseUrl) {
       <img class="logo" src="${logoUrl}" alt="Samewave Radio logo" />
       <div class="table">
         <div class="tHeader">
-          <div class="leftH">${headerLeft}</div>
+          <div>${headerLeft}</div>
           <div class="rightH">${headerRight}</div>
         </div>
         <div class="tBody">
@@ -239,8 +240,12 @@ app.post("/render", async (req, res) => {
   const W = data?.size?.width ?? 1080;
   const H = data?.size?.height ?? 1350;
 
-  // Base URL so HTML can load /Assets from this same service
-  const baseUrl = `${req.protocol}://${req.get("host")}`;
+  // Correct public base URL behind Render proxy
+  const xfProto = (req.headers["x-forwarded-proto"] || "").toString().split(",")[0].trim();
+  const xfHost = (req.headers["x-forwarded-host"] || "").toString().split(",")[0].trim();
+  const proto = xfProto || "https";
+  const host = xfHost || req.get("host");
+  const baseUrl = `${proto}://${host}`;
 
   let browser;
   try {
