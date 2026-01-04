@@ -1,7 +1,11 @@
 FROM mcr.microsoft.com/playwright:v1.57.0-jammy
+
 WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm install
+
+COPY package*.json ./
+RUN npm ci
+
 COPY server.js ./
-EXPOSE 3000
-CMD ["node","server.js"]
+COPY Assets ./Assets
+
+CMD ["node", "server.js"]
