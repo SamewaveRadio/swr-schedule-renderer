@@ -1,11 +1,10 @@
-// server.js — FULL REPLACEMENT (copy/paste the whole file)
+// server.js — FULL REPLACEMENT (copy/paste whole file)
 
 import express from "express";
 import { chromium } from "playwright";
 
 const app = express();
 
-// Parse JSON bodies (n8n will POST JSON)
 app.use(express.json({ limit: "5mb" }));
 
 // Friendly error for bad JSON
@@ -106,15 +105,14 @@ function htmlFor(data) {
     pointer-events:none;
   }
 
-  /* Full-height layout: header + schedule (fills) + footer */
+  /* Main padding wrapper */
   .pad{
     position:relative;
     padding:56px 56px 48px 56px;
     height:100%;
-    display:flex;
-    flex-direction:column;
   }
 
+  /* Header */
   .top{
     display:flex;
     justify-content:space-between;
@@ -160,18 +158,51 @@ function htmlFor(data) {
     transform: translateY(2px);
   }
 
-  /* Schedule fills remaining space and distributes sections */
+  /* Footer is ABSOLUTE so it can never get pushed off-canvas */
+  .footer{
+    position:absolute;
+    left:56px; right:56px;
+    bottom:48px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    color:var(--muted);
+  }
+
+  .tz{
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-weight:700;
+    letter-spacing:0.8px;
+    font-size:16px;
+  }
+
+  .url{
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    font-weight:900;
+    letter-spacing:2.2px;
+    font-size:22px;
+  }
+
+  /* Schedule area: keep within canvas and reserve space for footer */
   .schedule{
-    flex:1;
+    position:relative;
+    height:calc(100% - 56px - 48px - 64px - 22px); 
+    /* Explanation:
+       - total height minus top/bottom pad (56/48)
+       - minus approx title line height area (~64)
+       - minus header margin-bottom (22)
+       This keeps schedule safely above footer.
+    */
+    padding-bottom:86px; /* reserve space so last day never overlaps footer */
     display:flex;
     flex-direction:column;
-    justify-content:space-evenly; /* smoother than space-between */
-    min-height:0;
+    justify-content:space-between; /* spreads days vertically */
+    gap:22px;
   }
 
   .day{ margin:0; }
 
-  /* Keep divider start aligned (label column fixed) */
+  /* Fixed label column keeps rules aligned */
   .dayHead{
     display:grid;
     grid-template-columns: 180px 1fr;
@@ -180,7 +211,7 @@ function htmlFor(data) {
     margin-bottom:10px;
   }
 
-  /* Rectangular day box, variable width, even padding */
+  /* Rectangular day box, variable width */
   .dayBox{
     border:2px solid var(--line2);
     border-radius:10px;
@@ -200,62 +231,41 @@ function htmlFor(data) {
     opacity:0.9;
   }
 
-  /* Better spacing within each day section */
+  /* Rows block */
   .rows{
     margin-left:180px;
     margin-top:8px;
     display:flex;
     flex-direction:column;
-    gap:12px; /* spacing BETWEEN show lines */
+    gap:14px; /* consistent spacing between show lines */
   }
 
-  /* WRAPPING ENABLED */
+  /* One show line */
   .row{
     display:grid;
     grid-template-columns: 110px 1fr;
     gap:18px;
-    align-items:start;
-    margin:0; /* IMPORTANT: no margin, spacing handled by gap */
+    align-items:baseline; /* better alignment between time and title */
+    margin:0;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     font-weight:700;
     letter-spacing:0.35px;
     color:var(--muted);
     font-size:18px;
-    line-height:1.35;
+    line-height:1.45; /* more consistent “leading” */
   }
 
   .time{
     text-align:right;
-    padding-top:1px;
     color:var(--muted2);
     white-space:nowrap;
+    line-height:inherit;
   }
 
   .line{
     white-space:normal;
     overflow-wrap:anywhere;
-  }
-
-  .footer{
-    margin-top:18px;
-    display:flex;
-    justify-content:space-between;
-    align-items:center;
-    color:var(--muted);
-  }
-
-  .tz{
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-    font-weight:700;
-    letter-spacing:0.8px;
-    font-size:16px;
-  }
-
-  .url{
-    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-    font-weight:900;
-    letter-spacing:2.2px;
-    font-size:22px;
+    line-height:inherit;
   }
 </style>
 </head>
@@ -296,11 +306,14 @@ app.post("/render", async (req, res) => {
       args: ["--no-sandbox", "--disable-setuid-sandbox"],
     });
 
-    const page = await browser.newPage({ viewport: { width: W, height: H } });
+    const page = await browser.newPage({
+      viewport: { width: W, height: H },
+      deviceScaleFactor: 1,
+    });
 
     await page.setContent(htmlFor(data), { waitUntil: "networkidle" });
 
-    // Force exact 1080x1350 output (prevents any weird clipping surprises)
+    // Force exact output size (prevents any clipping surprises)
     const png = await page.screenshot({
       type: "png",
       clip: { x: 0, y: 0, width: W, height: H },
@@ -316,6 +329,5 @@ app.post("/render", async (req, res) => {
   }
 });
 
-// Render expects binding to process.env.PORT and 0.0.0.0
 const port = process.env.PORT || 3000;
 app.listen(port, "0.0.0.0", () => console.log(`Renderer listening on :${port}`));
