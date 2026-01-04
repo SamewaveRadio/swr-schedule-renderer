@@ -1,8 +1,20 @@
+// server.js — FULL REPLACEMENT (copy/paste the whole file)
+
 import express from "express";
 import { chromium } from "playwright";
 
 const app = express();
+
+// Parse JSON bodies (n8n will POST JSON)
 app.use(express.json({ limit: "5mb" }));
+
+// Friendly error for bad JSON
+app.use((err, _req, res, next) => {
+  if (err?.type === "entity.parse.failed") {
+    return res.status(400).json({ error: "Invalid JSON body" });
+  }
+  next(err);
+});
 
 function escapeHtml(str = "") {
   return String(str).replace(/[&<>"']/g, (m) => ({
@@ -67,9 +79,11 @@ function htmlFor(data) {
     --fg:#f4f4f5;
     --muted:rgba(244,244,245,0.82);
     --muted2:rgba(244,244,245,0.70);
-    --line:rgba(244,244,245,0.22);
     --line2:rgba(244,244,245,0.30);
   }
+
+  /* CRITICAL: prevents padding from causing cut-off */
+  *, *::before, *::after { box-sizing: border-box; }
 
   html,body{margin:0;padding:0;background:#000;}
   .canvas{
@@ -81,7 +95,7 @@ function htmlFor(data) {
   }
 
   /* subtle grid texture */
-  .canvas:before{
+  .canvas::before{
     content:"";
     position:absolute; inset:0;
     background:
@@ -95,7 +109,7 @@ function htmlFor(data) {
   /* Full-height layout: header + schedule (fills) + footer */
   .pad{
     position:relative;
-    padding:64px 64px 56px 64px;
+    padding:56px 56px 48px 56px;
     height:100%;
     display:flex;
     flex-direction:column;
@@ -106,7 +120,7 @@ function htmlFor(data) {
     justify-content:space-between;
     align-items:flex-end;
     gap:24px;
-    margin-bottom:26px;
+    margin-bottom:22px;
   }
 
   .title{
@@ -125,7 +139,7 @@ function htmlFor(data) {
     white-space:nowrap;
   }
 
-  /* Rectangles (not pills) */
+  /* Rectangular date box */
   .dateBox{
     border:2px solid var(--line2);
     border-radius:10px;
@@ -146,32 +160,32 @@ function htmlFor(data) {
     transform: translateY(2px);
   }
 
-  /* Schedule fills remaining space + spreads vertically */
+  /* Schedule fills remaining space and distributes sections */
   .schedule{
     flex:1;
     display:flex;
     flex-direction:column;
-    justify-content:space-between;
-    gap:18px;
+    justify-content:space-evenly; /* smoother than space-between */
     min-height:0;
   }
 
   .day{ margin:0; }
 
-  /* Keep divider start aligned even though day box widths vary */
+  /* Keep divider start aligned (label column fixed) */
   .dayHead{
     display:grid;
-    grid-template-columns: 180px 1fr; /* fixed label column */
+    grid-template-columns: 180px 1fr;
     align-items:center;
     column-gap:14px;
     margin-bottom:10px;
   }
 
+  /* Rectangular day box, variable width, even padding */
   .dayBox{
     border:2px solid var(--line2);
     border-radius:10px;
     padding:10px 16px;
-    width:fit-content;      /* variable width */
+    width:fit-content;
     display:inline-block;
     font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
     font-weight:800;
@@ -186,8 +200,13 @@ function htmlFor(data) {
     opacity:0.9;
   }
 
+  /* Better spacing within each day section */
   .rows{
-    margin-left:180px; /* align with day label column */
+    margin-left:180px;
+    margin-top:8px;
+    display:flex;
+    flex-direction:column;
+    gap:12px; /* spacing BETWEEN show lines */
   }
 
   /* WRAPPING ENABLED */
@@ -196,13 +215,13 @@ function htmlFor(data) {
     grid-template-columns: 110px 1fr;
     gap:18px;
     align-items:start;
-    margin:8px 0;
+    margin:0; /* IMPORTANT: no margin, spacing handled by gap */
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     font-weight:700;
     letter-spacing:0.35px;
     color:var(--muted);
     font-size:18px;
-    line-height:1.25;
+    line-height:1.35;
   }
 
   .time{
@@ -218,7 +237,7 @@ function htmlFor(data) {
   }
 
   .footer{
-    margin-top:26px;
+    margin-top:18px;
     display:flex;
     justify-content:space-between;
     align-items:center;
@@ -271,27 +290,32 @@ app.post("/render", async (req, res) => {
   const W = data?.size?.width ?? 1080;
   const H = data?.size?.height ?? 1350;
 
-  const browser = await chromium.launch({
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
-
+  let browser;
   try {
+    browser = await chromium.launch({
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+
     const page = await browser.newPage({ viewport: { width: W, height: H } });
 
     await page.setContent(htmlFor(data), { waitUntil: "networkidle" });
 
-    const png = await page.screenshot({ type: "png" });
+    // Force exact 1080x1350 output (prevents any weird clipping surprises)
+    const png = await page.screenshot({
+      type: "png",
+      clip: { x: 0, y: 0, width: W, height: H },
+    });
 
     res.setHeader("Content-Type", "image/png");
     res.status(200).send(png);
   } catch (err) {
-    console.error(err);
+    console.error("Render failed:", err);
     res.status(500).json({ error: "Render failed" });
   } finally {
-    await browser.close();
+    if (browser) await browser.close();
   }
 });
 
-// IMPORTANT: Render expects you to bind to process.env.PORT
+// Render expects binding to process.env.PORT and 0.0.0.0
 const port = process.env.PORT || 3000;
 app.listen(port, "0.0.0.0", () => console.log(`Renderer listening on :${port}`));
