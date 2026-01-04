@@ -1,11 +1,25 @@
-// server.js — FULL REPLACEMENT (copy/paste whole file)
+// server.js — FULL REPLACEMENT (green table poster + custom font/logo from /Assets)
 
 import express from "express";
+import path from "path";
+import { fileURLToPath } from "url";
 import { chromium } from "playwright";
 
 const app = express();
+app.use(express.json({ limit: "8mb" }));
 
-app.use(express.json({ limit: "5mb" }));
+// Resolve __dirname for ES Modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// IMPORTANT: your folder is named "Assets" (capital A)
+app.use(
+  "/Assets",
+  express.static(path.join(__dirname, "Assets"), {
+    maxAge: "7d",
+    etag: true,
+  })
+);
 
 // Friendly error for bad JSON
 app.use((err, _req, res, next) => {
@@ -25,46 +39,58 @@ function escapeHtml(str = "") {
   })[m]);
 }
 
-function htmlFor(data) {
+// Flatten either:
+// A) data.items: [{ left, right }]
+// B) data.days: [{ day, rows:[{time,line}]}]
+function normalizeRows(data) {
+  if (Array.isArray(data?.items) && data.items.length) {
+    return data.items.map((it) => ({
+      left: String(it.left ?? ""),
+      right: String(it.right ?? ""),
+    }));
+  }
+
+  const tz = data?.tzAbbrev ? ` ${data.tzAbbrev}` : "";
+  const days = Array.isArray(data?.days) ? data.days : [];
+
+  return days.flatMap((d) => {
+    const day = String(d?.day ?? "");
+    const rows = Array.isArray(d?.rows) ? d.rows : [];
+    return rows.map((r) => ({
+      left: String(r?.line ?? ""),
+      right: `${day} ${String(r?.time ?? "")}${tz}`.trim(),
+    }));
+  });
+}
+
+function htmlFor(data, baseUrl) {
   const W = data?.size?.width ?? 1080;
   const H = data?.size?.height ?? 1350;
 
-  const title = escapeHtml(data.title || "ON THE SOUNDWAVES");
-  const dateRange = escapeHtml(data.dateRange || "");
-  const tzNote = escapeHtml(data.timezoneNote || "*TIMES ARE IN PST*");
-  const urlText = escapeHtml(data.urlText || "SWR.LIVE");
+  // Header text
+  const headerLeft = escapeHtml(data.headerLeft || "THIS WEEK ON SAMEWAVE RADIO");
+  const headerRight = escapeHtml(data.headerRight || (data.dateRange || ""));
 
-  const pageBadge =
-    data?.pageTotal && data.pageTotal > 1
-      ? ` <span class="page">(${escapeHtml(data.pageIndex)}/${escapeHtml(
-          data.pageTotal
-        )})</span>`
-      : "";
+  // Use your exact asset names/locations
+  const fontUrl = data.fontUrl || `${baseUrl}/Assets/MainFont.woff2`;
+  const logoUrl = data.logoUrl || `${baseUrl}/Assets/Icon.png`;
 
-  const daysHtml = (data.days || [])
-    .map((d) => {
-      const dayLabel = escapeHtml(d.day || "");
-      const rows = (d.rows || [])
-        .map(
-          (r) => `
-          <div class="row">
-            <div class="time">${escapeHtml(r.time || "")}</div>
-            <div class="line">${escapeHtml(r.line || "")}</div>
-          </div>
-        `
-        )
-        .join("");
+  // Color theme (defaults match your reference)
+  const bg = data.bgColor || "#41E14D";      // bright green
+  const ink = data.inkColor || "#0B0C0F";    // near-black
+  const grid = data.gridColor || "rgba(0,0,0,0.20)";
 
-      return `
-        <section class="day">
-          <div class="dayHead">
-            <div class="dayBox">${dayLabel}</div>
-            <div class="rule"></div>
-          </div>
-          <div class="rows">${rows}</div>
-        </section>
-      `;
-    })
+  const rows = normalizeRows(data);
+
+  const rowsHtml = rows
+    .map(
+      (r) => `
+    <div class="tRow">
+      <div class="left">${escapeHtml(r.left)}</div>
+      <div class="right">${escapeHtml(r.right)}</div>
+    </div>
+  `
+    )
     .join("");
 
   return `<!doctype html>
@@ -74,244 +100,131 @@ function htmlFor(data) {
 <meta name="viewport" content="width=${W}, height=${H}" />
 <style>
   :root{
-    --bg:#0b0c0f;
-    --fg:#f4f4f5;
-    --muted:rgba(244,244,245,0.82);
-    --muted2:rgba(244,244,245,0.70);
-    --line2:rgba(244,244,245,0.30);
+    --bg:${bg};
+    --ink:${ink};
+    --grid:${grid};
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin:0; padding:0; background:#000; }
+
+  /* Custom font */
+  @font-face{
+    font-family: "SWRCustom";
+    src: url("${fontUrl}") format("woff2");
+    font-weight: 400 900;
+    font-style: normal;
+    font-display: swap;
   }
 
-  /* Prevent padding from causing cut-off */
-  *, *::before, *::after { box-sizing: border-box; }
-
-  html,body{margin:0;padding:0;background:#000;}
   .canvas{
-    width:${W}px;height:${H}px;
-    background:var(--bg);
-    color:var(--fg);
+    width:${W}px;
+    height:${H}px;
     position:relative;
     overflow:hidden;
+    background: var(--bg);
+    color: var(--ink);
   }
 
-  /* subtle grid texture */
+  /* Subtle texture/grid */
   .canvas::before{
     content:"";
     position:absolute; inset:0;
     background:
-      linear-gradient(to right, rgba(255,255,255,0.03) 1px, transparent 1px),
-      linear-gradient(to bottom, rgba(255,255,255,0.02) 1px, transparent 1px);
-    background-size: 72px 72px;
-    opacity:0.32;
+      linear-gradient(to right, rgba(0,0,0,0.06) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(0,0,0,0.06) 1px, transparent 1px);
+    background-size: 90px 90px;
+    opacity: 0.22;
     pointer-events:none;
   }
 
-  /* Main padding wrapper */
   .pad{
-    position:relative;
-    padding:56px 56px 48px 56px;
-    height:100%;
-  }
-
-  /* Header */
-  .top{
-    display:flex;
-    justify-content:space-between;
-    align-items:flex-end;
-    gap:24px;
-    margin-bottom:22px;
-  }
-
-  .title{
-    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-    font-weight:900;
-    text-transform:uppercase;
-    letter-spacing:2.6px;
-    font-size:64px;
-    line-height:1;
-  }
-
-  .meta{
-    display:flex;
-    align-items:center;
-    gap:12px;
-    white-space:nowrap;
-  }
-
-  /* Rectangular date box */
-  .dateBox{
-    border:2px solid var(--line2);
-    border-radius:10px;
-    padding:10px 16px;
-    width:fit-content;
-    display:inline-block;
-    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-    font-weight:800;
-    text-transform:uppercase;
-    letter-spacing:1.2px;
-    font-size:20px;
-  }
-
-  .page{
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-    font-size:14px;
-    color:var(--muted);
-    transform: translateY(2px);
-  }
-
-  /* Footer pinned to bottom */
-  .footer{
     position:absolute;
-    left:56px; right:56px;
-    bottom:48px;
-    display:flex;
-    justify-content:space-between;
-    align-items:center;
-    color:var(--muted);
+    inset: 0;
+    padding: 56px;
   }
 
-  .tz{
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-    font-weight:700;
-    letter-spacing:0.8px;
-    font-size:16px;
+  /* Logo in top-right */
+  .logo{
+    position:absolute;
+    top: 40px;
+    right: 56px;
+    width: 250px;
+    height: auto;
+    image-rendering: -webkit-optimize-contrast;
   }
 
-  .url{
-    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-    font-weight:900;
-    letter-spacing:2.2px;
-    font-size:22px;
+  /* Table container pinned to bottom */
+  .table{
+    position:absolute;
+    left:56px;
+    right:56px;
+    bottom:56px;
+    border: 2px solid var(--ink);
+    background: transparent;
   }
 
-  /* Schedule area with reserved space for footer */
-  .schedule{
-    position:relative;
-    height:calc(100% - 56px - 48px - 64px - 22px);
-    padding-bottom:86px;
-    display:flex;
-    flex-direction:column;
-    justify-content:space-between;
-    gap:22px;
-  }
-
-  .day{ margin:0; }
-
-  /*
-    UPDATED: dayHead now uses auto-sized label column so the divider
-    starts a consistent distance from the day rectangle.
-  */
-  .dayHead{
+  .tHeader{
     display:grid;
-    grid-template-columns: max-content 1fr; /* auto width for day box */
-    align-items:center;
-    column-gap:18px; /* EVEN SPACING between box and line */
-    margin-bottom:10px;
+    grid-template-columns: 1fr max-content;
+    gap: 24px;
+    padding: 12px 16px;
+    border-bottom: 2px solid var(--ink);
+    font-family: "SWRCustom", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-weight: 800;
+    letter-spacing: 1.6px;
+    text-transform: uppercase;
+    font-size: 16px;
+    line-height: 1.2;
   }
-
-  .dayBox{
-    border:2px solid var(--line2);
-    border-radius:10px;
-    padding:10px 16px;
-    width:fit-content;
-    display:inline-block;
-    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-    font-weight:800;
-    text-transform:lowercase;
-    letter-spacing:0.3px;
-    font-size:20px;
-    justify-self:start;
-  }
-
-  .rule{
-    border-top:2px solid var(--line2);
-    opacity:0.9;
-  }
-
-  /*
-    UPDATED: rows align under the start of the divider line by using
-    the same left edge as the divider line: dayBox width + column-gap.
-    We do this by matching .rows padding-left to the dayBox area.
-  */
-  .rows{
-    /* Align rows under the divider line start (not under a fixed 180px column) */
-    padding-left: calc(16px + 2px + 16px); /* matches dayBox horizontal padding + border (approx) */
-    margin-left: 0;
-    margin-top:8px;
-    display:flex;
-    flex-direction:column;
-    gap:14px;
-  }
-
-  /* Because dayHead is grid with max-content, we need rows to start at same x as rule.
-     We accomplish this by nesting rows under the rule column via a wrapper behavior:
-     We'll shift rows using a left margin equal to the dayBox rendered width + gap.
-     Since CSS can't easily reference sibling width, we instead wrap rows visually by
-     placing them in a grid context using the same columns as dayHead.
-  */
-
-  /* New layout: make each day a grid with same columns as dayHead */
-  .day{
-    display:grid;
-    grid-template-columns: max-content 1fr;
-    column-gap:18px;
-  }
-
-  /* dayHead spans both columns but keeps its internal grid for the line */
-  .dayHead{
-    grid-column: 1 / -1;
-  }
-
-  /* Place rows in the second column so they align with the rule start */
-  .rows{
-    grid-column: 2;
-    padding-left:0;
-  }
-
-  .row{
-    display:grid;
-    grid-template-columns: 110px 1fr;
-    gap:18px;
-    align-items:baseline;
-    margin:0;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-    font-weight:700;
-    letter-spacing:0.35px;
-    color:var(--muted);
-    font-size:18px;
-    line-height:1.45;
-  }
-
-  .time{
+  .tHeader .rightH{
     text-align:right;
-    color:var(--muted2);
     white-space:nowrap;
-    line-height:inherit;
   }
 
-  .line{
-    white-space:normal;
+  .tBody{
+    font-family: "SWRCustom", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-weight: 750;
+    letter-spacing: 1.1px;
+    text-transform: uppercase;
+    font-size: 14px;
+    line-height: 1.25;
+  }
+
+  .tRow{
+    display:grid;
+    grid-template-columns: 1fr 290px;
+    gap: 18px;
+    padding: 10px 16px;
+    border-bottom: 1px solid rgba(0,0,0,0.35);
+    align-items: start;
+  }
+  .tRow:last-child{
+    border-bottom: none;
+  }
+
+  .left{
     overflow-wrap:anywhere;
-    line-height:inherit;
+    white-space: normal;
+  }
+  .right{
+    text-align:right;
+    white-space: nowrap;
+    opacity: 0.95;
   }
 </style>
 </head>
 <body>
   <div class="canvas">
     <div class="pad">
-      <div class="top">
-        <div class="title">${title}</div>
-        <div class="meta">
-          <div class="dateBox">${dateRange}</div>${pageBadge}
+      <img class="logo" src="${logoUrl}" alt="Samewave Radio logo" />
+      <div class="table">
+        <div class="tHeader">
+          <div class="leftH">${headerLeft}</div>
+          <div class="rightH">${headerRight}</div>
         </div>
-      </div>
-
-      <div class="schedule">
-        ${daysHtml}
-      </div>
-
-      <div class="footer">
-        <div class="tz">${tzNote}</div>
-        <div class="url">${urlText}</div>
+        <div class="tBody">
+          ${rowsHtml}
+        </div>
       </div>
     </div>
   </div>
@@ -326,6 +239,9 @@ app.post("/render", async (req, res) => {
   const W = data?.size?.width ?? 1080;
   const H = data?.size?.height ?? 1350;
 
+  // Base URL so HTML can load /Assets from this same service
+  const baseUrl = `${req.protocol}://${req.get("host")}`;
+
   let browser;
   try {
     browser = await chromium.launch({
@@ -337,9 +253,8 @@ app.post("/render", async (req, res) => {
       deviceScaleFactor: 1,
     });
 
-    await page.setContent(htmlFor(data), { waitUntil: "networkidle" });
+    await page.setContent(htmlFor(data, baseUrl), { waitUntil: "networkidle" });
 
-    // Force exact output size (prevents any clipping surprises)
     const png = await page.screenshot({
       type: "png",
       clip: { x: 0, y: 0, width: W, height: H },
