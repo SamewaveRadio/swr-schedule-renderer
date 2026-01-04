@@ -271,4 +271,27 @@ app.post("/render", async (req, res) => {
   const W = data?.size?.width ?? 1080;
   const H = data?.size?.height ?? 1350;
 
-  const browser = awai
+  const browser = await chromium.launch({
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+
+  try {
+    const page = await browser.newPage({ viewport: { width: W, height: H } });
+
+    await page.setContent(htmlFor(data), { waitUntil: "networkidle" });
+
+    const png = await page.screenshot({ type: "png" });
+
+    res.setHeader("Content-Type", "image/png");
+    res.status(200).send(png);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Render failed" });
+  } finally {
+    await browser.close();
+  }
+});
+
+// IMPORTANT: Render expects you to bind to process.env.PORT
+const port = process.env.PORT || 3000;
+app.listen(port, "0.0.0.0", () => console.log(`Renderer listening on :${port}`));
