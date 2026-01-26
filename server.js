@@ -134,14 +134,23 @@ function formatFullDateLabel(date, timeZone) {
   const tzOut = tz ? ` ${tz}` : "";
   return `${month} ${day} ${time}${tzOut}`.trim();
 }
-
 function formatWeekRangeMonSun(weekStartISO, timeZone) {
-  // weekStartISO expected to be Monday 00:00 local-ish; we format MON -> SUN
-  // Output: "JAN 5 - JAN 11"
+  // Accepts weekStartISO that might be Sunday; always outputs MON -> SUN range.
+
   try {
-    const start = new Date(weekStartISO);
+    let start = new Date(weekStartISO);
+
+    // Determine weekday in target timezone
+    const wd = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "short" }).format(start);
+    // If it's Sunday, bump to Monday
+    if (wd === "Sun") {
+      const bumped = new Date(start);
+      bumped.setDate(bumped.getDate() + 1);
+      start = bumped;
+    }
+
     const end = new Date(start);
-    end.setDate(end.getDate() + 6);
+    end.setDate(end.getDate() + 6); // Monday + 6 = Sunday
 
     const aM = formatMonthShortUpper(start, timeZone);
     const aD = formatDayNumber(start, timeZone);
@@ -155,6 +164,7 @@ function formatWeekRangeMonSun(weekStartISO, timeZone) {
     return "";
   }
 }
+
 
 function normalizeRows(data) {
   const timeZone = data?.timeZone || DEFAULT_TZ;
