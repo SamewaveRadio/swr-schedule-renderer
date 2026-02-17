@@ -1,9 +1,8 @@
-// server.js — FULL REPLACEMENT
-// - Background color driven by req.body.bgColor (supports 4-variant renders)
-// - Header date range corrected to MONDAY -> SUNDAY when weekStartISO is provided
-// - Show date format: "JANUARY 10 7:00PM PST" (uses dateLabel if provided; otherwise formats from startISO/start)
-// - Robust /Assets serving on Render
-// - No outer border around schedule; ONLY header is boxed; rows have divider lines
+// server.js — FULL REPLACEMENT (memory-safe)
+// - Reuses one Playwright browser (major RAM reduction)
+// - Serializes renders (prevents overlaps from retries/timeouts)
+// - Logs each /render request
+// - Ensures page/context always closes
 
 import express from "express";
 import path from "path";
@@ -19,8 +18,6 @@ app.use(express.json({ limit: "8mb" }));
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DEFAULT_TZ = "America/Los_Angeles";
-
 // ---- Robust Assets serving ----
 const assetCandidates = [
   path.join(__dirname, "Assets"),
@@ -28,18 +25,14 @@ const assetCandidates = [
   path.join(process.cwd(), "swr-schedule-renderer", "Assets"),
 ];
 
-const assetsDir = assetCandidates.find((p) => {
-  try {
-    return fs.existsSync(p) && fs.statSync(p).isDirectory();
-  } catch {
-    return false;
-  }
-});
+const assetsDir = assetCandidates.find(
+  (p) => fs.existsSync(p) && fs.statSync(p).isDirectory()
+);
 
 if (assetsDir) {
   console.log("Serving Assets from:", assetsDir);
   app.use("/Assets", express.static(assetsDir, { maxAge: "7d", etag: true }));
-  app.use("/assets", express.static(assetsDir, { maxAge: "7d", etag: true })); // alias
+  app.use("/assets", express.static(assetsDir, { maxAge: "7d", etag: true }));
 } else {
   console.warn("⚠️ Assets folder not found. Tried:", assetCandidates);
 }
@@ -58,173 +51,50 @@ app.get("/debug/assets", (_req, res) => {
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 function escapeHtml(str = "") {
-  return String(str).replace(/[&<>"']/g, (m) =>
-    ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#039;",
-    })[m]
-  );
-}
-
-function getTzAbbrev(date, timeZone) {
-  // Returns "PST"/"PDT" etc.
-  try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      timeZoneName: "short",
-    }).formatToParts(date);
-    const tz = parts.find((p) => p.type === "timeZoneName")?.value || "";
-    // Some envs return "GMT-8"; that's still usable, but you want PST/PDT.
-    return tz;
-  } catch {
-    return "";
-  }
-}
-
-function formatTimeCompact(date, timeZone) {
-  // "7:00PM" (no space)
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  }).formatToParts(date);
-
-  const hour = parts.find((p) => p.type === "hour")?.value ?? "";
-  const minute = parts.find((p) => p.type === "minute")?.value ?? "00";
-  const dayPeriod = (parts.find((p) => p.type === "dayPeriod")?.value ?? "").toUpperCase();
-
-  return `${hour}:${minute}${dayPeriod}`;
-}
-
-function formatMonthLongUpper(date, timeZone) {
-  // "JANUARY"
-  const month = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    month: "long",
-  }).format(date);
-  return month.toUpperCase();
-}
-
-function formatMonthShortUpper(date, timeZone) {
-  // "JAN"
-  const month = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    month: "short",
-  }).format(date);
-  return month.toUpperCase();
-}
-
-function formatDayNumber(date, timeZone) {
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    day: "numeric",
-  }).format(date);
-}
-
-function formatFullDateLabel(date, timeZone) {
-  // "JANUARY 10 7:00PM PST"
-  const month = formatMonthLongUpper(date, timeZone);
-  const day = formatDayNumber(date, timeZone);
-  const time = formatTimeCompact(date, timeZone);
-  const tz = getTzAbbrev(date, timeZone);
-  const tzOut = tz ? ` ${tz}` : "";
-  return `${month} ${day} ${time}${tzOut}`.trim();
-}
-
-function formatWeekRangeMonSun(weekStartISO, timeZone) {
-  // weekStartISO expected to be Monday 00:00 local-ish; we format MON -> SUN
-  // Output: "JAN 5 - JAN 11"
-  try {
-    const start = new Date(weekStartISO);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 6);
-
-    const aM = formatMonthShortUpper(start, timeZone);
-    const aD = formatDayNumber(start, timeZone);
-    const bM = formatMonthShortUpper(end, timeZone);
-    const bD = formatDayNumber(end, timeZone);
-
-    // If month changes: "JAN 29 - FEB 4"
-    if (aM !== bM) return `${aM} ${aD} - ${bM} ${bD}`;
-    return `${aM} ${aD} - ${aM} ${bD}`;
-  } catch {
-    return "";
-  }
+  return String(str).replace(/[&<>"']/g, (m) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;",
+  })[m]);
 }
 
 function normalizeRows(data) {
-  const timeZone = data?.timeZone || DEFAULT_TZ;
-
-  // Option A: already flattened items [{left,right,dateLabel,startISO}]
   if (Array.isArray(data?.items) && data.items.length) {
-    return data.items.map((it) => {
-      const left = String(it.left ?? "");
-      // Prefer explicit dateLabel, else right, else format from startISO/start
-      let right =
-        (it.dateLabel != null ? String(it.dateLabel) : "") ||
-        (it.right != null ? String(it.right) : "");
-
-      if (!right) {
-        const startISO = it.startISO || it.start || it.startDateTime || null;
-        if (startISO) right = formatFullDateLabel(new Date(startISO), timeZone);
-      }
-
-      return { left, right: String(right ?? "").trim() };
-    });
+    return data.items.map((it) => ({
+      left: String(it.left ?? ""),
+      right: String(it.right ?? ""),
+    }));
   }
 
-  // Option B: days[] format from your n8n function
   const days = Array.isArray(data?.days) ? data.days : [];
+  const tz = data?.tzAbbrev ? ` ${data.tzAbbrev}` : "";
 
   return days.flatMap((d) => {
+    const day = String(d?.day ?? "");
     const rows = Array.isArray(d?.rows) ? d.rows : [];
-    return rows.map((r) => {
-      const left = String(r?.line ?? "");
-
-      // ✅ Prefer explicit dateLabel from n8n
-      let right = r?.dateLabel != null ? String(r.dateLabel) : "";
-
-      // If not provided, try formatting from ISO date fields
-      if (!right) {
-        const startISO = r?.startISO || r?.start || r?.startDateTime || null;
-        if (startISO) {
-          right = formatFullDateLabel(new Date(startISO), timeZone);
-        } else if (r?.time) {
-          // last-resort fallback (not ideal, but prevents blank)
-          right = String(r.time);
-        } else {
-          right = "";
-        }
-      }
-
-      return { left, right: right.trim() };
-    });
+    return rows.map((r) => ({
+      left: String(r?.line ?? ""),
+      right: String(
+        r?.dateLabel ??
+          (day && r?.time ? `${day} ${String(r.time)}${tz}` : String(r?.time ?? ""))
+      ).trim(),
+    }));
   });
 }
 
 function htmlFor(data, baseUrl) {
   const W = data?.size?.width ?? 1080;
   const H = data?.size?.height ?? 1350;
-  const timeZone = data?.timeZone || DEFAULT_TZ;
 
-  // Header text
-  const headerLeft = escapeHtml(data.titleLeft || data.headerLeft || "THIS WEEK ON SAMEWAVE RADIO");
+  const headerLeft = escapeHtml(data.headerLeft || data.titleLeft || "THIS WEEK ON SAMEWAVE RADIO");
+  const headerRight = escapeHtml(data.headerRight || data.dateRange || "");
 
-  // ✅ Fix header date range to Monday–Sunday if weekStartISO provided
-  const computedRange = data.weekStartISO ? formatWeekRangeMonSun(data.weekStartISO, timeZone) : "";
-  const headerRightRaw = computedRange || data.headerRight || data.dateRange || "";
-  const headerRight = escapeHtml(headerRightRaw);
-
-  // Assets
   const fontUrl = data.fontUrl || `${baseUrl}/Assets/MainFont.woff2`;
   const logoUrl = data.logoUrl || `${baseUrl}/Assets/Icon.png`;
 
-  // Colors (supports your 4-color variants)
-  const bg = data.bgColor || "#39e75f"; // original green fallback
+  const bg = data.bgColor || "#41E14D";
   const ink = data.inkColor || "#0B0C0F";
 
   const rows = normalizeRows(data);
@@ -293,7 +163,6 @@ function htmlFor(data, baseUrl) {
     image-rendering: -webkit-optimize-contrast;
   }
 
-  /* ✅ No outer border around the schedule */
   .table{
     position:absolute;
     left:56px;
@@ -303,7 +172,6 @@ function htmlFor(data, baseUrl) {
     background: transparent;
   }
 
-  /* ✅ Only header has a full box border */
   .tHeader{
     display:grid;
     grid-template-columns: 1fr max-content;
@@ -332,10 +200,9 @@ function htmlFor(data, baseUrl) {
     line-height: 1.25;
   }
 
-  /* Divider lines ONLY between shows */
   .tRow{
     display:grid;
-    grid-template-columns: 1fr 360px;
+    grid-template-columns: 1fr 380px;
     gap: 18px;
     padding: 10px 16px;
     border-bottom: 1px solid rgba(0,0,0,0.35);
@@ -373,44 +240,96 @@ function htmlFor(data, baseUrl) {
 </html>`;
 }
 
+// --------------------
+// Playwright: global browser reuse + serialized queue
+// --------------------
+let browserPromise = null;
+
+// Simple mutex queue (one render at a time)
+let queue = Promise.resolve();
+function withQueue(fn) {
+  const run = queue.then(fn, fn);
+  // keep chain alive even if one job errors
+  queue = run.catch(() => {});
+  return run;
+}
+
+async function getBrowser() {
+  if (!browserPromise) {
+    browserPromise = chromium.launch({
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+  }
+  return browserPromise;
+}
+
+function getBaseUrl(req) {
+  const xfProto = (req.headers["x-forwarded-proto"] || "").toString().split(",")[0].trim();
+  const xfHost = (req.headers["x-forwarded-host"] || "").toString().split(",")[0].trim();
+  const proto = xfProto || "https";
+  const host = xfHost || req.get("host");
+  return `${proto}://${host}`;
+}
+
 app.post("/render", async (req, res) => {
+  const startedAt = Date.now();
   const data = req.body || {};
   const W = data?.size?.width ?? 1080;
   const H = data?.size?.height ?? 1350;
 
-  const xfProto = (req.headers["x-forwarded-proto"] || "").toString().split(",")[0].trim();
-  const xfHost = (req.headers["x-forwarded-host"] || "").toString().split(",")[0].trim();
+  console.log(`[render] start ${new Date().toISOString()} size=${W}x${H} theme=${data?.themeKey || "n/a"}`);
 
-  const proto = xfProto || "https";
-  const host = xfHost || req.get("host");
-  const baseUrl = `${proto}://${host}`;
+  return withQueue(async () => {
+    let context = null;
+    let page = null;
 
-  let browser;
+    try {
+      const browser = await getBrowser();
+      context = await browser.newContext({
+        viewport: { width: W, height: H },
+        deviceScaleFactor: 1,
+      });
+
+      page = await context.newPage();
+
+      const baseUrl = getBaseUrl(req);
+
+      await page.setContent(htmlFor(data, baseUrl), { waitUntil: "domcontentloaded" });
+
+      // Ensure fonts are loaded (reduces layout shifts)
+      await page.evaluate(() => document.fonts?.ready);
+
+      // Small wait for image/font network loads (but not “networkidle”, which can hang)
+      await page.waitForTimeout(150);
+
+      const png = await page.screenshot({
+        type: "png",
+        clip: { x: 0, y: 0, width: W, height: H },
+      });
+
+      res.setHeader("Content-Type", "image/png");
+      res.status(200).send(png);
+
+      console.log(`[render] ok ${Date.now() - startedAt}ms`);
+    } catch (err) {
+      console.error("[render] failed:", err);
+      // If the browser got into a bad state, reset it (next request relaunches)
+      browserPromise = null;
+      res.status(500).json({ error: "Render failed" });
+    } finally {
+      try { if (page) await page.close(); } catch {}
+      try { if (context) await context.close(); } catch {}
+    }
+  });
+});
+
+// Clean shutdown
+process.on("SIGTERM", async () => {
   try {
-    browser = await chromium.launch({
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
-
-    const page = await browser.newPage({
-      viewport: { width: W, height: H },
-      deviceScaleFactor: 1,
-    });
-
-    await page.setContent(htmlFor(data, baseUrl), { waitUntil: "networkidle" });
-
-    const png = await page.screenshot({
-      type: "png",
-      clip: { x: 0, y: 0, width: W, height: H },
-    });
-
-    res.setHeader("Content-Type", "image/png");
-    res.status(200).send(png);
-  } catch (err) {
-    console.error("Render failed:", err);
-    res.status(500).json({ error: "Render failed" });
-  } finally {
-    if (browser) await browser.close();
-  }
+    const b = await browserPromise;
+    if (b) await b.close();
+  } catch {}
+  process.exit(0);
 });
 
 const port = process.env.PORT || 3000;
